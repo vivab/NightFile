@@ -155,9 +155,28 @@ def back_kb(callback: str = "adm:menu") -> InlineKeyboardMarkup:
     )
 
 
+async def safe_edit(call: CallbackQuery, text: str, reply_markup: InlineKeyboardMarkup | None = None):
+    """
+    Пытается отредактировать текущее сообщение. Если это невозможно
+    (например, сообщение с файлом — у него нет текста для edit_text,
+    либо текст не изменился) — просто отправляет новое сообщение,
+    чтобы кнопка не оставалась "мёртвой".
+    """
+    try:
+        await call.message.edit_text(text, reply_markup=reply_markup)
+    except Exception:
+        await call.message.answer(text, reply_markup=reply_markup)
+
+
 @dp.message(Command("admin"))
 async def admin_cmd(message: Message, state: FSMContext):
     if not is_admin(message.from_user.id):
+        await message.answer(
+            "⛔️ Нет доступа к админ-панели.\n"
+            f"Твой ID: <code>{message.from_user.id}</code>\n"
+            "Проверь, что этот ID указан в переменной ADMIN_IDS на хостинге "
+            "(через запятую, без пробелов и лишних символов)."
+        )
         return
     await state.clear()
     await message.answer("Админ-панель:", reply_markup=admin_menu_kb())
@@ -166,9 +185,11 @@ async def admin_cmd(message: Message, state: FSMContext):
 @dp.callback_query(F.data == "adm:menu")
 async def adm_menu(call: CallbackQuery, state: FSMContext):
     if not is_admin(call.from_user.id):
+        await call.answer("Нет доступа", show_alert=True)
         return
     await state.clear()
-    await call.message.edit_text("Админ-панель:", reply_markup=admin_menu_kb())
+    await safe_edit(call, "Админ-панель:", admin_menu_kb())
+    await call.answer()
 
 
 # ---------- добавить файл ----------
@@ -178,7 +199,7 @@ async def adm_addfile(call: CallbackQuery, state: FSMContext):
     if not is_admin(call.from_user.id):
         return
     await state.set_state(AdminStates.waiting_file_upload)
-    await call.message.edit_text(
+    await safe_edit(call, 
         "Пришли или перешли мне файл (документ/фото/видео/аудио), который нужно сохранить.",
         reply_markup=back_kb(),
     )
@@ -220,14 +241,14 @@ async def adm_delfile(call: CallbackQuery):
         return
     rows = await db.list_files()
     if not rows:
-        await call.message.edit_text("Файлов пока нет.", reply_markup=back_kb())
+        await safe_edit(call, "Файлов пока нет.", reply_markup=back_kb())
         return
     kb_rows = [
         [InlineKeyboardButton(text=f"🗑 #{fid} {title}", callback_data=f"delfile_ask:{fid}")]
         for fid, title in rows
     ]
     kb_rows.append([InlineKeyboardButton(text="⬅️ Назад", callback_data="adm:menu")])
-    await call.message.edit_text(
+    await safe_edit(call, 
         "Выбери файл для удаления:", reply_markup=InlineKeyboardMarkup(inline_keyboard=kb_rows)
     )
 
@@ -245,7 +266,7 @@ async def adm_delfile_ask(call: CallbackQuery):
             ]
         ]
     )
-    await call.message.edit_text(f"Удалить файл #{fid}?", reply_markup=kb)
+    await safe_edit(call, f"Удалить файл #{fid}?", reply_markup=kb)
 
 
 @dp.callback_query(F.data.startswith("delfile_do:"))
@@ -274,7 +295,7 @@ async def adm_listfiles(call: CallbackQuery):
             for fid, title in rows
         ]
         text = "\n\n".join(lines)
-    await call.message.edit_text(text, reply_markup=back_kb())
+    await safe_edit(call, text, reply_markup=back_kb())
 
 
 # ---------- переименовать файл (универсальная утилита) ----------
@@ -284,7 +305,7 @@ async def adm_renamefile(call: CallbackQuery, state: FSMContext):
     if not is_admin(call.from_user.id):
         return
     await state.set_state(AdminStates.waiting_rename_upload)
-    await call.message.edit_text(
+    await safe_edit(call, 
         "Пришли или перешли файл (документ), который нужно переименовать.\n"
         "Я скачаю его и верну с новым именем.",
         reply_markup=back_kb(),
@@ -364,7 +385,7 @@ async def adm_op_manage(call: CallbackQuery):
         if targets
         else "Список ОП пуст. Добавь канал, группу или бота ниже."
     )
-    await call.message.edit_text(text, reply_markup=InlineKeyboardMarkup(inline_keyboard=kb_rows))
+    await safe_edit(call, text, reply_markup=InlineKeyboardMarkup(inline_keyboard=kb_rows))
 
 
 @dp.callback_query(F.data.startswith("op_del:"))
@@ -385,7 +406,7 @@ async def adm_op_add(call: CallbackQuery, state: FSMContext):
     await state.update_data(op_type=type_)
     await state.set_state(AdminStates.waiting_op_link)
     label = OP_TYPE_LABEL.get(type_, type_)
-    await call.message.edit_text(
+    await safe_edit(call, 
         f"Добавляем: {label}\n\nПришли ссылку-приглашение (то, что откроется по кнопке).",
         reply_markup=back_kb("adm:op_manage"),
     )
@@ -440,7 +461,7 @@ async def adm_setchannel(call: CallbackQuery, state: FSMContext):
     if not is_admin(call.from_user.id):
         return
     await state.set_state(AdminStates.waiting_channel_url)
-    await call.message.edit_text(
+    await safe_edit(call, 
         "Пришли ссылку для кнопки «Наш канал» "
         "(она будет в стартовом сообщении и под каждым выданным файлом).",
         reply_markup=back_kb(),
@@ -463,7 +484,7 @@ async def adm_setwelcome(call: CallbackQuery, state: FSMContext):
     if not is_admin(call.from_user.id):
         return
     await state.set_state(AdminStates.waiting_welcome_text)
-    await call.message.edit_text("Пришли новый текст стартового сообщения.", reply_markup=back_kb())
+    await safe_edit(call, "Пришли новый текст стартового сообщения.", reply_markup=back_kb())
 
 
 @dp.message(AdminStates.waiting_welcome_text)
@@ -484,7 +505,7 @@ async def adm_stats(call: CallbackQuery):
     users = await db.count_users()
     files = await db.list_files()
     targets = await db.list_op_targets()
-    await call.message.edit_text(
+    await safe_edit(call, 
         f"Пользователей: {users}\nФайлов: {len(files)}\nЦелей ОП: {len(targets)}",
         reply_markup=back_kb(),
     )
@@ -531,7 +552,7 @@ async def start_plain(message: Message):
 async def check_sub_callback(call: CallbackQuery):
     payload = call.data.split(":", 1)[1]
     if await is_subscribed(call.from_user.id):
-        await call.message.edit_text("Подписка подтверждена ✅")
+        await safe_edit(call, "Подписка подтверждена ✅")
         if payload.startswith("file_"):
             file_db_id = int(payload.split("_", 1)[1])
             await deliver_file(call.message.chat.id, file_db_id)
