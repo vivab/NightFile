@@ -24,9 +24,40 @@ CREATE TABLE IF NOT EXISTS users (
 """
 
 
+_EXPECTED_COLUMNS = {
+    "files": {"id", "title", "file_id", "file_type", "caption"},
+    "settings": {"key", "value"},
+    "users": {"user_id", "joined_at"},
+}
+
+
+async def _migrate(db: aiosqlite.Connection) -> None:
+    """
+    Если на диске остался файл bot.db от старой/битой версии схемы
+    (например, из-за прежних неудачных деплоев), пересоздаём именно
+    те таблицы, чья структура не совпадает с ожидаемой.
+    Это безопасно на этапе разработки, когда в базе ещё нет важных данных.
+    """
+    cur = await db.execute(
+        "SELECT name FROM sqlite_master WHERE type='table'"
+    )
+    existing_tables = {row[0] for row in await cur.fetchall()}
+
+    for table, expected_cols in _EXPECTED_COLUMNS.items():
+        if table not in existing_tables:
+            continue
+        cur = await db.execute(f"PRAGMA table_info({table})")
+        actual_cols = {row[1] for row in await cur.fetchall()}
+        if actual_cols != expected_cols:
+            await db.execute(f"DROP TABLE {table}")
+
+    await db.commit()
+
+
 async def init_db() -> None:
     os.makedirs(os.path.dirname(DB_PATH), exist_ok=True)
     async with aiosqlite.connect(DB_PATH) as db:
+        await _migrate(db)
         await db.executescript(_SCHEMA)
         await db.commit()
 
