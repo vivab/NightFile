@@ -21,6 +21,14 @@ CREATE TABLE IF NOT EXISTS users (
     user_id  INTEGER PRIMARY KEY,
     joined_at TEXT DEFAULT CURRENT_TIMESTAMP
 );
+
+CREATE TABLE IF NOT EXISTS op_targets (
+    id        INTEGER PRIMARY KEY AUTOINCREMENT,
+    type      TEXT NOT NULL,     -- channel / group / bot
+    title     TEXT NOT NULL,
+    url       TEXT NOT NULL,     -- ссылка для кнопки
+    check_id  TEXT               -- chat_id/@username для проверки подписки (NULL у ботов)
+);
 """
 
 
@@ -28,6 +36,7 @@ _EXPECTED_COLUMNS = {
     "files": {"id", "title", "file_id", "file_type", "caption"},
     "settings": {"key", "value"},
     "users": {"user_id", "joined_at"},
+    "op_targets": {"id", "type", "title", "url", "check_id"},
 }
 
 
@@ -114,6 +123,14 @@ async def delete_file(file_db_id: int) -> None:
         await db.commit()
 
 
+async def rename_file_title(file_db_id: int, new_title: str) -> None:
+    async with aiosqlite.connect(DB_PATH) as db:
+        await db.execute(
+            "UPDATE files SET title = ? WHERE id = ?", (new_title, file_db_id)
+        )
+        await db.commit()
+
+
 # ---------- users (для /stats) ----------
 
 async def add_user(user_id: int) -> None:
@@ -129,3 +146,29 @@ async def count_users() -> int:
         cur = await db.execute("SELECT COUNT(*) FROM users")
         row = await cur.fetchone()
         return row[0] if row else 0
+
+
+# ---------- op_targets (обязательная подписка: каналы/группы/боты) ----------
+
+async def add_op_target(type_: str, title: str, url: str, check_id: str | None) -> int:
+    async with aiosqlite.connect(DB_PATH) as db:
+        cur = await db.execute(
+            "INSERT INTO op_targets (type, title, url, check_id) VALUES (?, ?, ?, ?)",
+            (type_, title, url, check_id),
+        )
+        await db.commit()
+        return cur.lastrowid
+
+
+async def list_op_targets():
+    async with aiosqlite.connect(DB_PATH) as db:
+        cur = await db.execute(
+            "SELECT id, type, title, url, check_id FROM op_targets ORDER BY id"
+        )
+        return await cur.fetchall()
+
+
+async def delete_op_target(op_id: int) -> None:
+    async with aiosqlite.connect(DB_PATH) as db:
+        await db.execute("DELETE FROM op_targets WHERE id = ?", (op_id,))
+        await db.commit()
